@@ -1,3 +1,13 @@
+// 部分站点的搜索会模糊匹配副标题、演员或单个字符，需再按标题过滤
+function filterResultsByTitle(results, query, apiId) {
+    if (!API_SITES[apiId]?.filterByTitle) return results;
+    const normalizedQuery = query.toLowerCase().replace(/\s+/g, '');
+    if (!normalizedQuery) return results;
+    return results.filter(item =>
+        (item.vod_name || '').toLowerCase().replace(/\s+/g, '').includes(normalizedQuery)
+    );
+}
+
 async function searchByAPIAndKeyWord(apiId, query) {
     try {
         let apiUrl, apiName, apiBaseUrl;
@@ -119,7 +129,7 @@ async function searchByAPIAndKeyWord(apiId, query) {
             });
         }
         
-        return results;
+        return filterResultsByTitle(results, query, apiId);
     } catch (error) {
         console.warn(`API ${apiId} 搜索失败:`, error);
         return [];

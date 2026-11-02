@@ -34,6 +34,7 @@ const API_SITES = {
     bfzy: {
         api: 'https://bfzyapi.com/api.php/provide/vod',
         name: '暴风资源',
+        filterByTitle: true, // 站点搜索为多字段/单字模糊匹配，需按标题过滤
     },
     tyyszy: {
         api: 'https://tyyszy.com/api.php/provide/vod',
@@ -112,7 +113,8 @@ const API_SITES = {
     },
     lzi: {
         api: 'https://cj.lziapi.com/api.php/provide/vod/',
-        name: '量子资源站'
+        name: '量子资源站',
+        filterByTitle: true, // 站点搜索为多字段/单字模糊匹配，需按标题过滤
     },
     //ARCHIVE https://telegra.ph/APIs-08-12
 };
