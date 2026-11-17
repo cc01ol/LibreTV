@@ -21,101 +21,122 @@ const SITE_CONFIG = {
 };
 
 // API站点配置
+// 搜索适配字段（均为可选）：
+//   searchPath     自定义搜索参数模板，{query} 为关键词占位符（缺省用 API_CONFIG.search.path）
+//   pagePath       自定义翻页参数模板，{query}/{page} 为占位符（缺省用 API_CONFIG.search.pagePath）
+//   filterByTitle  站点按多字段/模糊匹配搜索时置 true，客户端再按标题过滤，保证结果与关键词相关
+// 2026-11-17 全量探测（关键词 "凡人"/"庆余年"）：内置 8 个源的搜索/详情/播放均可用，其余 14 个已停用，原因见文末注释块。
+// 追加源（js/customer_site.js）另行探测，可用的同样按此格式配置。
 const API_SITES = {
     dyttzy: {
         api: 'http://caiji.dyttzyapi.com/api.php/provide/vod',
         name: '电影天堂资源',
-        detail: 'http://caiji.dyttzyapi.com',
-    },
-    ruyi: {
-        api: 'https://cj.rycjapi.com/api.php/provide/vod',
-        name: '如意资源',
+        // detail 页面有 WAF 人机验证，改用 JSON 详情接口（已确认返回 m3u8 直链）
     },
     bfzy: {
         api: 'https://bfzyapi.com/api.php/provide/vod',
         name: '暴风资源',
         filterByTitle: true, // 站点搜索为多字段/单字模糊匹配，需按标题过滤
     },
-    tyyszy: {
-        api: 'https://tyyszy.com/api.php/provide/vod',
-        name: '天涯资源',
-    },
-    xiaomaomi: {
-        api: 'https://zy.xmm.hk/api.php/provide/vod',
-        name: '小猫咪资源',
-    },
     ffzy: {
         api: 'http://ffzy5.tv/api.php/provide/vod',
         name: '非凡影视',
-        detail: 'http://ffzy5.tv',
-    },
-    heimuer: {
-        api: 'https://json.heimuer.xyz/api.php/provide/vod',
-        name: '黑木耳',
-        detail: 'https://heimuer.tv',
+        // detail 页面抓取会混入 3 个播放源共 600 条地址，改用 JSON 详情接口（200 集 m3u8）
     },
     zy360: {
         api: 'https://360zy.com/api.php/provide/vod',
         name: '360资源',
     },
-    iqiyi: {
-        api: 'https://www.iqiyizyapi.com/api.php/provide/vod',
-        name: 'iqiyi资源',
-    },
-    wolong: {
-        api: 'https://wolongzyw.com/api.php/provide/vod',
-        name: '卧龙资源',
-    },
-    hwba: {
-        api: 'https://cjhwba.com/api.php/provide/vod',
-        name: '华为吧资源',
-    },
     jisu: {
         api: 'https://jszyapi.com/api.php/provide/vod',
         name: '极速资源',
-        detail: 'https://jszyapi.com',
-    },
-    dbzy: {
-        api: 'https://dbzy.tv/api.php/provide/vod',
-        name: '豆瓣资源',
-    },
-    mozhua: {
-        api: 'https://mozhuazy.com/api.php/provide/vod',
-        name: '魔爪资源',
+        // detail 页面无 m3u8 直链，改用 JSON 详情接口（已确认返回 m3u8 直链）
     },
     mdzy: {
         api: 'https://www.mdzyapi.com/api.php/provide/vod',
         name: '魔都资源',
     },
-    zuid: {
-        api: 'https://api.zuidapi.com/api.php/provide/vod',
-        name: '最大资源'
-    },
-    yinghua: {
-        api: 'https://m3u8.apiyhzy.com/api.php/provide/vod',
-        name: '樱花资源'
-    },
     baidu: {
         api: 'https://api.apibdzy.com/api.php/provide/vod',
         name: '百度云资源'
-    },
-    wujin: {
-        api: 'https://api.wujinapi.me/api.php/provide/vod',
-        name: '无尽资源'
-    },
-    wwzy: {
-        api: 'https://wwzy.tv/api.php/provide/vod',
-        name: '旺旺短剧'
-    },
-    ikun: {
-        api: 'https://ikunzyapi.com/api.php/provide/vod',
-        name: 'iKun资源'
     },
     lzi: {
         api: 'https://cj.lziapi.com/api.php/provide/vod/',
         name: '量子资源站',
         filterByTitle: true, // 站点搜索为多字段/单字模糊匹配，需按标题过滤
     },
+
+    // ===== 以下站点 2026-11-17 探测不可用，已停用（如需恢复，删掉对应注释符即可） =====
+    // 如意资源：TLS 握手/HTTP 连接被重置（ECONNRESET），无法访问
+    // ruyi: {
+    //     api: 'https://cj.rycjapi.com/api.php/provide/vod',
+    //     name: '如意资源',
+    // },
+    // 天涯资源：搜索接口返回“暂不支持搜索”，换用其它参数均忽略关键词（返回全站列表）
+    // tyyszy: {
+    //     api: 'https://tyyszy.com/api.php/provide/vod',
+    //     name: '天涯资源',
+    // },
+    // 小猫咪资源：域名 zy.xmm.hk 已无解析记录（NXDOMAIN）
+    // xiaomaomi: {
+    //     api: 'https://zy.xmm.hk/api.php/provide/vod',
+    //     name: '小猫咪资源',
+    // },
+    // 黑木耳：json.heimuer.xyz 已跳转到域名停放页（welcome），API 不可用
+    // heimuer: {
+    //     api: 'https://json.heimuer.xyz/api.php/provide/vod',
+    //     name: '黑木耳',
+    // },
+    // iqiyi资源：TLS 握手/HTTP 连接被重置（ECONNRESET），无法访问
+    // iqiyi: {
+    //     api: 'https://www.iqiyizyapi.com/api.php/provide/vod',
+    //     name: 'iqiyi资源',
+    // },
+    // 卧龙资源：API 地址返回与影视无关的 HTML 页面，无 JSON 数据
+    // wolong: {
+    //     api: 'https://wolongzyw.com/api.php/provide/vod',
+    //     name: '卧龙资源',
+    // },
+    // 华为吧资源：域名已跳转到广告导航页（成人导航），API 不可用
+    // hwba: {
+    //     api: 'https://cjhwba.com/api.php/provide/vod',
+    //     name: '华为吧资源',
+    // },
+    // 豆瓣资源：域名 dbzy.tv 已无解析记录（NXDOMAIN）
+    // dbzy: {
+    //     api: 'https://dbzy.tv/api.php/provide/vod',
+    //     name: '豆瓣资源',
+    // },
+    // 魔爪资源：API 地址返回与影视无关的 HTML 页面，无 JSON 数据
+    // mozhua: {
+    //     api: 'https://mozhuazy.com/api.php/provide/vod',
+    //     name: '魔爪资源',
+    // },
+    // 最大资源：搜索忽略关键词，任何参数都返回全站列表（pagecount 6299，首条与关键词无关）
+    // zuid: {
+    //     api: 'https://api.zuidapi.com/api.php/provide/vod',
+    //     name: '最大资源'
+    // },
+    // 樱花资源：ac= 参数请求被 nginx 403 拦截，?q= 忽略关键词（返回全站列表）
+    // yinghua: {
+    //     api: 'https://m3u8.apiyhzy.com/api.php/provide/vod',
+    //     name: '樱花资源'
+    // },
+    // 无尽资源：Cloudflare 人机验证（403 Just a moment），代理无法获取数据
+    // wujin: {
+    //     api: 'https://api.wujinapi.me/api.php/provide/vod',
+    //     name: '无尽资源'
+    // },
+    // 旺旺短剧：TCP 连接超时，无法访问
+    // wwzy: {
+    //     api: 'https://wwzy.tv/api.php/provide/vod',
+    //     name: '旺旺短剧'
+    // },
+    // iKun资源：域名被解析到 0.0.0.0/解析失败（ENOENT），无法访问
+    // ikun: {
+    //     api: 'https://ikunzyapi.com/api.php/provide/vod',
+    //     name: 'iKun资源'
+    // },
     //ARCHIVE https://telegra.ph/APIs-08-12
 };
 
@@ -142,7 +163,8 @@ const AGGREGATED_SEARCH_CONFIG = {
 const API_CONFIG = {
     search: {
         // 只拼接参数部分，不再包含 /api.php/provide/vod/
-        path: '?ac=videolist&wd=',
+        // 支持 {query}/{page} 占位符；旧式“末尾直接拼接关键词”的写法仍然兼容
+        path: '?ac=videolist&wd={query}',
         pagePath: '?ac=videolist&wd={query}&pg={page}',
         maxPages: 50, // 最大获取页数
         headers: {
@@ -159,6 +181,32 @@ const API_CONFIG = {
         }
     }
 };
+
+// 按站点生成搜索 URL：优先使用站点自定义的 searchPath/pagePath，缺省使用 API_CONFIG
+// siteKey 为内置站点 key 或自定义源 key（自定义源没有站点配置，直接走默认模板）
+function buildSearchUrl(apiBaseUrl, siteKey, query, page) {
+    const site = (!siteKey || siteKey.startsWith('custom_')) ? null : API_SITES[siteKey];
+    const currentPage = Number(page) > 0 ? Number(page) : 1;
+
+    let template;
+    if (currentPage > 1) {
+        template = (site && site.pagePath) || (site && site.searchPath) || API_CONFIG.search.pagePath;
+    } else {
+        template = (site && site.searchPath) || API_CONFIG.search.path;
+    }
+
+    let url = apiBaseUrl + template;
+    if (url.includes('{query}')) {
+        url = url.replace('{query}', encodeURIComponent(query));
+    } else {
+        // 兼容旧式模板：参数结尾直接拼接关键词
+        url += encodeURIComponent(query);
+    }
+    if (url.includes('{page}')) {
+        url = url.replace('{page}', String(currentPage));
+    }
+    return url;
+}
 
 // 优化后的正则表达式模式
 const M3U8_PATTERN = /\$https?:\/\/[^"'\s]+?\.m3u8/g;

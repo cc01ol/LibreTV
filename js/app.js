@@ -1,5 +1,33 @@
+// 默认选中的资源（均已验证可用；不可用站点已在 config.js 中停用）
+// 均使用精确关键词搜索，避免默认搜索时拉取大量模糊结果
+const DEFAULT_APIS = ['dyttzy', 'ffzy', 'jisu', 'zy360'];
+
+// 过滤掉配置中已不存在的站点（例如本地缓存里还保留着已停用的源）
+function sanitizeSelectedAPIs(list) {
+    const valid = (Array.isArray(list) ? list : []).filter(id =>
+        typeof id === 'string' && (id.startsWith('custom_') || !!API_SITES[id])
+    );
+    return valid.length > 0 ? valid : [...DEFAULT_APIS];
+}
+
+// 读取本地缓存的已选资源，剔除已停用的站点并写回
+function loadSelectedAPIs() {
+    try {
+        const stored = localStorage.getItem('selectedAPIs');
+        const parsed = stored ? JSON.parse(stored) : DEFAULT_APIS;
+        const cleaned = sanitizeSelectedAPIs(parsed);
+        if (stored && JSON.stringify(cleaned) !== JSON.stringify(parsed)) {
+            localStorage.setItem('selectedAPIs', JSON.stringify(cleaned));
+        }
+        return cleaned;
+    } catch (e) {
+        console.warn('读取已选资源配置失败，使用默认值:', e);
+        return [...DEFAULT_APIS];
+    }
+}
+
 // 全局变量
-let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["tyyszy","dyttzy", "bfzy", "ruyi"]'); // 默认选中资源
+let selectedAPIs = loadSelectedAPIs(); // 默认选中资源
 let customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
 
 // 添加当前播放的集数索引
@@ -13,22 +41,10 @@ let episodesReversed = false;
 
 // 页面初始化
 document.addEventListener('DOMContentLoaded', function () {
-    // 初始化API复选框
-    initAPICheckboxes();
-
-    // 初始化自定义API列表
-    renderCustomAPIsList();
-
-    // 初始化显示选中的API数量
-    updateSelectedApiCount();
-
-    // 渲染搜索历史
-    renderSearchHistory();
-
-    // 设置默认API选择（如果是第一次加载）
+    // 设置默认API选择（如果是第一次加载），并清理本地缓存中已停用的源
     if (!localStorage.getItem('hasInitializedDefaults')) {
         // 默认选中资源
-        selectedAPIs = ["tyyszy", "bfzy", "dyttzy", "ruyi"];
+        selectedAPIs = [...DEFAULT_APIS];
         localStorage.setItem('selectedAPIs', JSON.stringify(selectedAPIs));
 
         // 默认选中过滤开关
@@ -41,6 +57,18 @@ document.addEventListener('DOMContentLoaded', function () {
         // 标记已初始化默认值
         localStorage.setItem('hasInitializedDefaults', 'true');
     }
+
+    // 初始化API复选框
+    initAPICheckboxes();
+
+    // 初始化自定义API列表
+    renderCustomAPIsList();
+
+    // 初始化显示选中的API数量
+    updateSelectedApiCount();
+
+    // 渲染搜索历史
+    renderSearchHistory();
 
     // 设置黄色内容过滤器开关初始状态
     const yellowFilterToggle = document.getElementById('yellowFilterToggle');

@@ -2,7 +2,7 @@
 async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
     const customDetail = url.searchParams.get('customDetail') || '';
-    const source = url.searchParams.get('source') || 'heimuer';
+    const source = url.searchParams.get('source') || 'dyttzy';
     
     try {
         if (url.pathname === '/api/search') {
@@ -20,9 +20,7 @@ async function handleApiRequest(url) {
                 throw new Error('无效的API来源');
             }
             
-            const apiUrl = customApi
-                ? `${customApi}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`
-                : `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            const apiUrl = buildSearchUrl(customApi || API_SITES[source].api, source, searchQuery, 1);
             
             // 添加超时处理
             const controller = new AbortController();
@@ -62,9 +60,14 @@ async function handleApiRequest(url) {
                     }
                 });
                 
+                // 内置源按标题过滤，保证结果与关键词相关
+                const filteredList = source !== 'custom' && typeof filterResultsByTitle === 'function'
+                    ? filterResultsByTitle(data.list, searchQuery, source)
+                    : data.list;
+
                 return JSON.stringify({
                     code: 200,
-                    list: data.list || [],
+                    list: filteredList || [],
                 });
             } catch (fetchError) {
                 clearTimeout(timeoutId);
@@ -75,7 +78,7 @@ async function handleApiRequest(url) {
         // 详情处理
         if (url.pathname === '/api/detail') {
             const id = url.searchParams.get('id');
-            const sourceCode = url.searchParams.get('source') || 'heimuer'; // 获取源代码
+            const sourceCode = url.searchParams.get('source') || 'dyttzy'; // 获取源代码
             
             if (!id) {
                 throw new Error('缺少视频ID参数');
@@ -151,12 +154,19 @@ async function handleApiRequest(url) {
                 if (videoDetail.vod_play_url) {
                     // 分割不同播放源
                     const playSources = videoDetail.vod_play_url.split('$$$');
-                    
-                    // 提取第一个播放源的集数（通常为主要源）
-                    if (playSources.length > 0) {
-                        const mainSource = playSources[0];
+
+                    // 优先选择提供 m3u8 直链的播放源：
+                    // 多数采集站第一个源是网页解析地址(如 /share/xxx)，无法直接播放，
+                    // 真正的直链在后面的 *m3u8 源里
+                    let mainSource = playSources[0] || '';
+                    const directSource = playSources.find(src => /\.m3u8(\?|$|#)/i.test(src));
+                    if (directSource) {
+                        mainSource = directSource;
+                    }
+
+                    if (mainSource) {
                         const episodeList = mainSource.split('#');
-                        
+
                         // 从每个集数中提取URL
                         episodes = episodeList.map(ep => {
                             const parts = ep.split('$');
@@ -369,7 +379,7 @@ async function handleAggregatedSearch(searchQuery) {
     // 创建所有API源的搜索请求
     const searchPromises = availableSources.map(async (source) => {
         try {
-            const apiUrl = `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            const apiUrl = buildSearchUrl(API_SITES[source].api, source, searchQuery, 1);
             
             // 使用Promise.race添加超时处理
             const timeoutPromise = new Promise((_, reject) => 
@@ -403,8 +413,11 @@ async function handleAggregatedSearch(searchQuery) {
                 source_name: API_SITES[source].name,
                 source_code: source
             }));
-            
-            return results;
+
+            // 按站点配置过滤标题，保证结果与关键词相关
+            return typeof filterResultsByTitle === 'function'
+                ? filterResultsByTitle(results, searchQuery, source)
+                : results;
         } catch (error) {
             console.warn(`${source}源搜索失败:`, error);
             return []; // 返回空数组表示该源搜索失败
@@ -483,7 +496,7 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
     // 为每个API创建搜索请求
     const searchPromises = apiUrls.map(async (apiUrl, index) => {
         try {
-            const fullUrl = `${apiUrl}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            const fullUrl = buildSearchUrl(apiUrl, 'custom', searchQuery, 1);
             
             // 使用Promise.race添加超时处理
             const timeoutPromise = new Promise((_, reject) => 
