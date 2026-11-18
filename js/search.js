@@ -78,7 +78,7 @@ async function searchByAPIAndKeyWord(apiId, query) {
         }
 
         // 处理第一页结果
-        const results = data.list.map(item => ({
+        const results = data.list.map(item => normalizeVodItem({
             ...item,
             source_name: apiName,
             source_code: apiId,
@@ -133,7 +133,7 @@ async function searchByAPIAndKeyWord(apiId, query) {
                         if (!pageData || !pageData.list || !Array.isArray(pageData.list)) return [];
 
                         // 处理当前页结果
-                        return pageData.list.map(item => ({
+                        return pageData.list.map(item => normalizeVodItem({
                             ...item,
                             source_name: apiName,
                             source_code: apiId,

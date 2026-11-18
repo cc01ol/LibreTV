@@ -25,8 +25,11 @@ const SITE_CONFIG = {
 //   searchPath     自定义搜索参数模板，{query} 为关键词占位符（缺省用 API_CONFIG.search.path）
 //   pagePath       自定义翻页参数模板，{query}/{page} 为占位符（缺省用 API_CONFIG.search.pagePath）
 //   filterByTitle  站点按多字段/模糊匹配搜索时置 true，客户端再按标题过滤，保证结果与关键词相关
-// 2026-11-17 全量探测（关键词 "凡人"/"庆余年"）：内置 8 个源的搜索/详情/播放均可用，其余 14 个已停用，原因见文末注释块。
-// 追加源（js/customer_site.js）另行探测，可用的同样按此格式配置。
+//   adapter        需要专用解析逻辑的站点标记（目前仅 'freeok'），由 js/api.js 处理
+//   detailPagePath / playPagePath  专用适配用的详情页、播放页模板（{id}/{sid}/{nid} 占位符）
+// 2026-11-17 全量探测（关键词 "凡人"/"庆余年"）：8 个采集站的搜索/详情/播放均可用，其余已停用，原因见文末注释块。
+// 另有网页解析型站点（adapter: 'scrape'，FreeOK / 麦田影视 / 66大片）与 js/customer_site.js 中的追加源。
+// 追影猫(zhuiyingmiao4.com) 为导航站，本身无播放源，这里接入的是它导流的第三方播放源中可用的几个。
 const API_SITES = {
     dyttzy: {
         api: 'http://caiji.dyttzyapi.com/api.php/provide/vod',
@@ -65,8 +68,56 @@ const API_SITES = {
         name: '量子资源站',
         filterByTitle: true, // 站点搜索为多字段/单字模糊匹配，需按标题过滤
     },
+    // 追影猫(https://www.zhuiyingmiao4.com) 是“茶杯狐式”导航站：本身没有播放源，只把影片导流到第三方站点。
+    // 以下为其中可用的第三方播放源（均已验证 搜索 + 播放 可用）：
+    // 共青春：标准苹果CMS 采集接口，直链 m3u8
+    gqc7: {
+        api: 'https://gqc7.top/api.php/provide/vod',
+        name: '共青春',
+    },
+    // 麦田影视：采集接口关闭，退回 suggest 搜索 + 详情页/播放页解析，播放页 player_aaaa 里是 m3u8 直链。
+    // 注意：部分片源是加密 token(如 NBY-xxx) 或空选集，这类取不到地址会提示“未能解析到播放地址”。
+    mtyy7: {
+        api: 'https://www.mtyy7.com',
+        name: '麦田影视',
+        adapter: 'scrape',
+        searchPath: '/index.php/ajax/suggest?mid=1&wd={query}&limit=100',
+        detailPagePath: '/voddetail/{id}.html',
+        playPagePath: '/vodplay/{id}-{sid}-{nid}.html',
+    },
+    // 66大片：同麦田影视，但播放页地址是 base64+百分号编码，适配器会自动解码。
+    // 注意：部分条目只有优酷等平台网页链接（解码后不是流地址，已自动跳过）。
+    dpw66: {
+        api: 'https://www.66dpw.vip',
+        name: '66大片',
+        adapter: 'scrape',
+        searchPath: '/index.php/ajax/suggest?mid=1&wd={query}&limit=100',
+        detailPagePath: '/voddetail/{id}.html',
+        playPagePath: '/vodplay/{id}-{sid}-{nid}.html',
+    },
 
-    // ===== 以下站点 2026-11-17 探测不可用，已停用（如需恢复，删掉对应注释符即可） =====
+    // FreeOK：官方域名 freeok.vip 已失效（权威 DNS 指向 www.huawei.com，TLS 握手被拒），以下为当前可用镜像。
+    // 该站关闭了标准采集接口（/api.php/provide/vod 返回 closed），只提供 suggest 搜索与网页播放页，
+    // 因此由 api.js 中 adapter: 'scrape' 的专用适配处理：搜索字段映射 + 逐集解析播放页 + 补 /index.m3u8。
+    freeok: {
+        api: 'https://www.freeokgw.com',
+        name: 'FreeOK',
+        adapter: 'scrape',
+        // 搜索：一次取全（limit=100），返回字段为 {id, name, pic}
+        searchPath: '/index.php/ajax/suggest?mid=1&wd={query}&limit=100',
+        // 详情页：只提供剧集链接 /K/{id}-{sid}-{nid}.html
+        detailPagePath: '/O/{id}.html',
+        // 播放页：内含 player_aaaa JSON，其 url 再补 /index.m3u8 即为直链
+        playPagePath: '/K/{id}-{sid}-{nid}.html',
+    },
+
+    // ===== 以下站点探测不可用/暂不接入（如需恢复，删掉对应注释符即可） =====
+    // dgjiawu.com（NO视频镜像）：域名解析正常(154.211.102.65)，但 80/443 连接被拒；曾短暂可访问一次，
+    //   期间 /api.php/provide/vod、/index.php/ajax/suggest 均返回 404，接口无法确认，暂不接入。
+    // dgjiawu: {
+    //     api: 'https://www.dgjiawu.com/api.php/provide/vod',
+    //     name: 'NO视频',
+    // },
     // 如意资源：TLS 握手/HTTP 连接被重置（ECONNRESET），无法访问
     // ruyi: {
     //     api: 'https://cj.rycjapi.com/api.php/provide/vod',
@@ -206,6 +257,17 @@ function buildSearchUrl(apiBaseUrl, siteKey, query, page) {
         url = url.replace('{page}', String(currentPage));
     }
     return url;
+}
+
+// 部分站点（如 FreeOK 的 suggest 接口）返回 {id,name,pic} 这类简写字段，
+// 这里统一补齐成页面渲染所需的 vod_* 字段
+function normalizeVodItem(item) {
+    if (!item || typeof item !== 'object') return item;
+    if (item.vod_id === undefined && item.id !== undefined) item.vod_id = item.id;
+    if (!item.vod_name && item.name) item.vod_name = item.name;
+    if (!item.vod_pic && item.pic) item.vod_pic = item.pic;
+    if (!item.vod_remarks && item.note) item.vod_remarks = item.note;
+    return item;
 }
 
 // 优化后的正则表达式模式

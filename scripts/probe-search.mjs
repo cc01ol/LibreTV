@@ -57,6 +57,12 @@ const report = {};
 const summaryRows = [];
 
 for (const [key, site] of Object.entries(API_SITES)) {
+    // 走专用适配的站点（如 FreeOK）不使用标准采集接口，这里跳过
+    if (site.adapter) {
+        log(`\n[${key}] ${site.name} -> ${site.api} (专用适配 ${site.adapter}，跳过标准接口探测)`);
+        continue;
+    }
+
     const entry = { name: site.name, api: site.api, variants: {}, base: null };
 
     log(`\n[${key}] ${site.name} -> ${site.api}`);

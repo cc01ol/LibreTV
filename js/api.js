@@ -52,6 +52,7 @@ async function handleApiRequest(url) {
                 
                 // 添加源信息到每个结果
                 data.list.forEach(item => {
+                    normalizeVodItem(item);
                     item.source_name = source === 'custom' ? '自定义源' : API_SITES[source].name;
                     item.source_code = source;
                     // 对于自定义源，添加API URL信息
@@ -96,6 +97,11 @@ async function handleApiRequest(url) {
             
             if (!API_SITES[sourceCode] && sourceCode !== 'custom') {
                 throw new Error('无效的API来源');
+            }
+
+            // 需要专用适配的站点（如 FreeOK / 麦田影视 / 66大片：无标准采集接口，只能解析网页）
+            if (sourceCode !== 'custom' && API_SITES[sourceCode].adapter) {
+                return await handleScrapeDetail(id, sourceCode);
             }
 
             // 对于有detail参数的源，都使用特殊处理方式
@@ -365,6 +371,243 @@ async function handleSpecialSourceDetail(id, sourceCode) {
     }
 }
 
+// 通过内部代理抓取文本（供需要专用适配的站点使用）
+async function fetchTextViaProxy(targetUrl, timeoutMs) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs || 15000);
+    try {
+        const proxiedUrl = window.ProxyAuth?.addAuthToProxyUrl
+            ? await window.ProxyAuth.addAuthToProxyUrl(PROXY_URL + encodeURIComponent(targetUrl))
+            : PROXY_URL + encodeURIComponent(targetUrl);
+        const response = await fetch(proxiedUrl, {
+            signal: controller.signal,
+            // 注意：这里不要带 application/json，部分站点(如麦田影视)会因此返回“JSON 转义后的 HTML”
+            headers: { 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8' }
+        });
+        if (!response.ok) {
+            throw new Error(`请求失败 ${response.status}: ${targetUrl}`);
+        }
+        let text = await response.text();
+        // 少数站点会把整页 HTML 作为 JSON 字符串返回，这里解开
+        if (/^\s*"/.test(text) && /\\u|\\"|\\\//.test(text.slice(0, 200))) {
+            try {
+                const parsed = JSON.parse(text);
+                if (typeof parsed === 'string') text = parsed;
+            } catch (e) {
+                // 保持原样
+            }
+        }
+        return text;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+// 播放页里的播放地址可能是：直链 m3u8、/play/<token> 解析地址、或 base64/百分号编码后的地址
+function decodePlayUrl(url) {
+    let current = String(url || '').trim();
+    if (typeof atob !== 'function') return current;
+    for (let i = 0; i < 3 && current && !/^https?:\/\//i.test(current); i++) {
+        let decoded = null;
+        try {
+            const text = atob(current.replace(/\s+/g, ''));
+            if (text && /^[\x20-\x7e]+$/.test(text)) decoded = text;
+        } catch (e) {
+            decoded = null;
+        }
+        if (!decoded) break;
+        current = decoded;
+        if (current.includes('%')) {
+            try {
+                current = decodeURIComponent(current);
+            } catch (e) {
+                // 保持原样
+            }
+        }
+    }
+    return current;
+}
+
+// 判断解析出的地址是否真的能播（排除优酷/爱奇艺等网页链接）
+function isStreamableUrl(url) {
+    if (!/^https?:\/\//i.test(url)) return false;
+    if (/\.m3u8(\?|$)/i.test(url)) return true;
+    if (/\.(mp4|m4v|flv|ts)(\?|$)/i.test(url)) return true;
+    if (/\/play\/[A-Za-z0-9]+$/i.test(url)) return true;
+    return false;
+}
+
+// 网页解析地址转直链：多数采集站的 /play/<token> 补上 /index.m3u8 即为可播放地址
+function toDirectPlayUrl(url) {
+    const current = decodePlayUrl(url);
+    if (!/^https?:\/\//i.test(current)) return '';
+    if (/\.m3u8(\?|$)/i.test(current)) return current;
+    if (/\/play\/[A-Za-z0-9]+$/i.test(current)) return current + '/index.m3u8';
+    return isStreamableUrl(current) ? current : '';
+}
+
+// 网页解析型站点专用适配（FreeOK / 麦田影视 / 66大片 等）：
+// 这些站关闭了标准采集接口，只提供 suggest 搜索 + 网页详情页/播放页，
+// 因此从详情页拿到剧集链接，再逐集解析播放页里的 player_aaaa 取播放地址
+const scrapeDetailCache = new Map(); // `${source}_${id}` -> { expires, payload }
+const SCRAPE_CACHE_TTL = 10 * 60 * 1000;
+
+// 由配置里的播放页模板生成剧集链接正则，例如 /vodplay/{id}-{sid}-{nid}.html
+function buildPlayLinkPattern(template) {
+    const escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const withGroups = escaped
+        .replace('\\{sid\\}', '(\\d+)')
+        .replace('\\{nid\\}', '(\\d+)')
+        .replace('{sid}', '(\\d+)')
+        .replace('{nid}', '(\\d+)');
+    return new RegExp(withGroups.replace(/\\\{id\\\}|\{id\}/g, '\\d+'), 'g');
+}
+
+// 抓播放页并解析出该集的播放地址
+async function resolvePlayPageUrl(base, playTemplate, id, ep) {
+    const pageUrl = base + playTemplate
+        .replace('{id}', encodeURIComponent(id))
+        .replace('{sid}', String(ep.sid))
+        .replace('{nid}', String(ep.nid));
+    const pageHtml = await fetchTextViaProxy(pageUrl);
+    const cfgMatch = pageHtml.match(/player_aaaa\s*=\s*(\{[\s\S]*?\})\s*<\/script>/)
+        || pageHtml.match(/player_[a-z]+\s*=\s*(\{[\s\S]*?\})\s*<\/script>/);
+    if (!cfgMatch) return '';
+    let cfg;
+    try {
+        cfg = JSON.parse(cfgMatch[1]);
+    } catch (e) {
+        return '';
+    }
+    return toDirectPlayUrl(cfg.url || '');
+}
+
+async function handleScrapeDetail(id, sourceCode) {
+    const cacheKey = `${sourceCode}_${id}`;
+    const cached = scrapeDetailCache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+        return cached.payload;
+    }
+
+    const site = API_SITES[sourceCode];
+    const base = site.api;
+    const playTemplate = site.playPagePath || '/vodplay/{id}-{sid}-{nid}.html';
+
+    // 1. 详情页，收集剧集链接
+    const detailUrl = base + (site.detailPagePath || '/voddetail/{id}.html').replace('{id}', encodeURIComponent(id));
+    let detailHtml = await fetchTextViaProxy(detailUrl);
+
+    const linkPattern = buildPlayLinkPattern(playTemplate);
+    const collectEpisodes = (html) => {
+        const seen = new Set();
+        const list = [];
+        let m;
+        linkPattern.lastIndex = 0;
+        while ((m = linkPattern.exec(html)) !== null) {
+            const sid = Number(m[1]);
+            const nid = Number(m[2]);
+            if (!sid || !nid) continue;
+            const key = `${sid}-${nid}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            list.push({ sid, nid });
+        }
+        return list;
+    };
+
+    let episodesMeta = collectEpisodes(detailHtml);
+
+    // 少数页面会返回不含剧集链接的空壳（风控/缓存），带时间戳再取一次
+    if (episodesMeta.length === 0) {
+        detailHtml = await fetchTextViaProxy(detailUrl + (detailUrl.includes('?') ? '&' : '?') + '_t=' + Date.now());
+        episodesMeta = collectEpisodes(detailHtml);
+    }
+
+    if (episodesMeta.length === 0) {
+        throw new Error('详情页未找到剧集链接');
+    }
+
+    // 2. 按播放源分组，集数多的优先（同一影片常有多个线路，部分线路地址加密不可用）
+    const bySource = new Map();
+    for (const ep of episodesMeta) {
+        if (!bySource.has(ep.sid)) bySource.set(ep.sid, []);
+        bySource.get(ep.sid).push(ep);
+    }
+    const candidates = [...bySource.values()]
+        .map(list => list.sort((a, b) => a.nid - b.nid))
+        .sort((a, b) => b.length - a.length);
+
+    // 3. 逐个线路试播：首集能拿到可播放地址就选中该线路（最多试 3 条）
+    let chosen = null;
+    for (const list of candidates.slice(0, 3)) {
+        try {
+            const firstUrl = await resolvePlayPageUrl(base, playTemplate, id, list[0]);
+            if (firstUrl) {
+                chosen = { list, firstUrl };
+                break;
+            }
+        } catch (e) {
+            console.warn(`${site.name} 线路 ${list[0].sid} 解析失败:`, e.message);
+        }
+    }
+    if (!chosen) {
+        throw new Error('未能解析到播放地址');
+    }
+
+    // 4. 逐集抓播放页（并发 16），首集复用上面的结果
+    const episodes = [chosen.firstUrl];
+    const rest = chosen.list.slice(1);
+    const concurrency = 16;
+    for (let i = 0; i < rest.length; i += concurrency) {
+        const chunk = rest.slice(i, i + concurrency);
+        const chunkUrls = await Promise.all(chunk.map(async ep => {
+            try {
+                return await resolvePlayPageUrl(base, playTemplate, id, ep);
+            } catch (e) {
+                console.warn(`${site.name} 第${ep.nid}集解析失败:`, e.message);
+                return '';
+            }
+        }));
+        episodes.push(...chunkUrls);
+    }
+
+    const validEpisodes = episodes.filter(Boolean);
+    if (validEpisodes.length === 0) {
+        throw new Error('未能解析到播放地址');
+    }
+
+    // 5. 标题/封面
+    const bookMatch = detailHtml.match(/<title[^>]*>\s*《([^》]+)》/i);
+    const titleMatch = detailHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const titleText = bookMatch
+        ? bookMatch[1].trim()
+        : (titleMatch ? titleMatch[1].split(/[-_|]/)[0].trim() : '');
+    const coverMatch = detailHtml.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i);
+
+    const payload = JSON.stringify({
+        code: 200,
+        episodes: validEpisodes,
+        detailUrl: detailUrl,
+        videoInfo: {
+            title: titleText,
+            cover: coverMatch ? coverMatch[1] : '',
+            source_name: site.name,
+            source_code: sourceCode
+        }
+    });
+
+    // 详情要逐集抓播放页，结果缓存 10 分钟，避免重复打开同一部剧反复解析
+    scrapeDetailCache.set(cacheKey, { expires: Date.now() + SCRAPE_CACHE_TTL, payload });
+    if (scrapeDetailCache.size > 50) {
+        const now = Date.now();
+        for (const [key, value] of scrapeDetailCache) {
+            if (value.expires <= now || scrapeDetailCache.size > 50) scrapeDetailCache.delete(key);
+        }
+    }
+
+    return payload;
+}
+
 // 处理聚合搜索
 async function handleAggregatedSearch(searchQuery) {
     // 获取可用的API源列表（排除aggregated和custom）
@@ -409,7 +652,7 @@ async function handleAggregatedSearch(searchQuery) {
             
             // 为搜索结果添加源信息
             const results = data.list.map(item => ({
-                ...item,
+                ...normalizeVodItem(item),
                 source_name: API_SITES[source].name,
                 source_code: source
             }));

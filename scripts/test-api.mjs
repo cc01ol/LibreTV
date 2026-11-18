@@ -11,12 +11,17 @@ async function proxyFetch(input, init) {
     const url = String(input);
     if (!url.startsWith('/proxy/')) throw new Error('非代理请求: ' + url);
     const target = decodeURIComponent(url.slice('/proxy/'.length));
-    return fetch(target, { headers: { 'User-Agent': UA, Accept: 'application/json' }, redirect: 'follow', signal: init?.signal });
+    return fetch(target, {
+        headers: { 'User-Agent': UA, ...(init?.headers || {}) },
+        redirect: 'follow',
+        signal: init?.signal,
+    });
 }
 
 const sandbox = {
     console, fetch: proxyFetch, setTimeout, clearTimeout, AbortController, URL, URLSearchParams,
     encodeURIComponent, decodeURIComponent, JSON, Math, String, Number, Array, Object, Error, RegExp,
+    atob: s => Buffer.from(s, 'base64').toString('binary'),
     localStorage: { getItem: () => null, setItem: () => { } },
     location: { origin: 'http://localhost' },
 };
@@ -28,18 +33,21 @@ vm.runInContext(read('customer_site.js'), sandbox, { filename: 'customer_site.js
 vm.runInContext(read('search.js'), sandbox, { filename: 'search.js' });
 vm.runInContext(read('api.js'), sandbox, { filename: 'api.js' });
 
-const handleApiRequest = sandbox.handleApiRequest;
 const call = async (pathAndQuery) => {
-    const out = await handleApiRequest(new URL('http://localhost' + pathAndQuery));
+    const out = await sandbox.handleApiRequest(new URL('http://localhost' + pathAndQuery));
     return JSON.parse(out);
 };
 
+const KEYWORD = process.argv[2] || '凡人';
+
 // 1. /api/search 相关性
-console.log('=== /api/search?wd=凡人 ===');
+console.log(`=== /api/search?wd=${KEYWORD} ===`);
+const firstItems = {};
 for (const key of Object.keys(sandbox.API_SITES)) {
     try {
-        const r = await call(`/api/search?wd=${encodeURIComponent('凡人')}&source=${key}`);
-        const rel = (r.list || []).filter(i => (i.vod_name || '').includes('凡人')).length;
+        const r = await call(`/api/search?wd=${encodeURIComponent(KEYWORD)}&source=${key}`);
+        const rel = (r.list || []).filter(i => (i.vod_name || '').includes(KEYWORD)).length;
+        firstItems[key] = (r.list || [])[0];
         console.log(`${key.padEnd(10)} code=${r.code} 结果=${(r.list || []).length} 标题命中=${rel}`);
     } catch (e) {
         console.log(`${key.padEnd(10)} 异常: ${e.message}`);
@@ -50,13 +58,17 @@ for (const key of Object.keys(sandbox.API_SITES)) {
 console.log('\n=== /api/detail 播放源抽检 ===');
 for (const key of Object.keys(sandbox.API_SITES)) {
     try {
-        const s = await call(`/api/search?wd=${encodeURIComponent('凡人')}&source=${key}`);
-        const item = (s.list || []).find(i => (i.vod_name || '').includes('凡人')) || (s.list || [])[0];
+        let item = firstItems[key];
+        if (!item) {
+            const s = await call(`/api/search?wd=${encodeURIComponent(KEYWORD)}&source=${key}`);
+            item = (s.list || [])[0];
+        }
         if (!item) { console.log(`${key.padEnd(10)} 无搜索结果，跳过`); continue; }
+        const t0 = Date.now();
         const d = await call(`/api/detail?id=${encodeURIComponent(item.vod_id)}&source=${key}`);
         const eps = d.episodes || [];
         const m3 = eps.filter(u => u.includes('.m3u8')).length;
-        console.log(`${key.padEnd(10)} code=${d.code} 集数=${String(eps.length).padEnd(4)} 含m3u8=${String(m3).padEnd(4)} ${eps[0] ? eps[0].slice(0, 90) : (d.msg || '')}`);
+        console.log(`${key.padEnd(10)} code=${d.code} 集数=${String(eps.length).padEnd(4)} 含m3u8=${String(m3).padEnd(4)} ${Date.now() - t0}ms ${eps[0] ? eps[0].slice(0, 90) : (d.msg || '')}`);
     } catch (e) {
         console.log(`${key.padEnd(10)} 异常: ${e.message}`);
     }
