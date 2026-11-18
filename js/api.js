@@ -43,13 +43,16 @@ async function handleApiRequest(url) {
                     throw new Error(`API请求失败: ${response.status}`);
                 }
                 
-                const data = await response.json();
-                
+                const data = normalizeSearchPayload(await response.json());
+
                 // 检查JSON格式的有效性
                 if (!data || !Array.isArray(data.list)) {
                     throw new Error('API返回的数据格式无效');
                 }
-                
+
+                // 取不到片源的条目直接丢弃
+                data.list = data.list.filter(item => item && item.playable !== false);
+
                 // 添加源信息到每个结果
                 data.list.forEach(item => {
                     normalizeVodItem(item);
@@ -99,7 +102,11 @@ async function handleApiRequest(url) {
                 throw new Error('无效的API来源');
             }
 
-            // 需要专用适配的站点（如 FreeOK / 麦田影视 / 66大片：无标准采集接口，只能解析网页）
+            // 需要专用适配的站点
+            if (sourceCode !== 'custom' && API_SITES[sourceCode].adapter === 'xmovie') {
+                return await handleXmovieDetail(id, sourceCode);
+            }
+            // 网页解析型站点（如 FreeOK / 麦田影视 / 66大片：无标准采集接口，只能解析网页）
             if (sourceCode !== 'custom' && API_SITES[sourceCode].adapter) {
                 return await handleScrapeDetail(id, sourceCode);
             }
@@ -606,6 +613,94 @@ async function handleScrapeDetail(id, sourceCode) {
     }
 
     return payload;
+}
+
+// x影视专用适配：自研 JSON 接口
+//   详情     api.php?action=detail&id=X   -> { lines:[{playlist_v3|playlist, count}] }
+//   播放清单  playlist_v3                 -> { origins:{originId:baseUrl}, items:[{origin_id, suffix}] }
+//   单集地址  origins[origin_id] + suffix
+async function handleXmovieDetail(id, sourceCode) {
+    const cacheKey = `${sourceCode}_${id}`;
+    const cached = scrapeDetailCache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+        return cached.payload;
+    }
+
+    const site = API_SITES[sourceCode];
+    const base = site.api;
+    const detailUrl = `${base}/api.php?action=detail&id=${encodeURIComponent(id)}`;
+
+    let detail;
+    try {
+        detail = JSON.parse(await fetchTextViaProxy(detailUrl));
+    } catch (e) {
+        throw new Error('详情接口返回异常');
+    }
+    if (!detail || detail.error) {
+        throw new Error((detail && detail.error) || '详情获取失败');
+    }
+
+    // 线路按集数从多到少试，取第一条能解析出地址的
+    const lines = (detail.lines || []).filter(line => line && (line.playlist_v3 || line.playlist));
+    lines.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
+
+    let episodes = [];
+    for (const line of lines.slice(0, 3)) {
+        try {
+            const playlist = JSON.parse(await fetchTextViaProxy(line.playlist_v3 || line.playlist));
+            const origins = playlist.origins || {};
+            const list = (playlist.items || []).map(item => {
+                const suffix = item.suffix || '';
+                if (!suffix) return '';
+                if (/^https?:\/\//i.test(suffix)) return suffix;
+                const origin = origins[item.origin_id] || '';
+                if (!origin) return '';
+                return origin.replace(/\/+$/, '') + (suffix.startsWith('/') ? suffix : '/' + suffix);
+            }).filter(url => url && isStreamableUrl(url));
+
+            // 首集试播，避免选中已失效的线路
+            if (list.length && await isPlayableStream(list[0])) {
+                episodes = list;
+                break;
+            }
+        } catch (e) {
+            console.warn(`${site.name} 线路 ${line.name || line.id} 解析失败:`, e.message);
+        }
+    }
+
+    if (episodes.length === 0) {
+        throw new Error('未能解析到播放地址');
+    }
+
+    const payload = JSON.stringify({
+        code: 200,
+        episodes: episodes,
+        detailUrl: detailUrl,
+        videoInfo: {
+            title: detail.title || '',
+            cover: detail.poster || '',
+            desc: detail.summary || '',
+            type: (detail.genres || []).join('/'),
+            year: detail.year,
+            area: detail.region,
+            remarks: detail.progress,
+            source_name: site.name,
+            source_code: sourceCode
+        }
+    });
+
+    scrapeDetailCache.set(cacheKey, { expires: Date.now() + SCRAPE_CACHE_TTL, payload });
+    return payload;
+}
+
+// 试播探测：取回 m3u8 首段确认线路可用
+async function isPlayableStream(url, timeoutMs) {
+    try {
+        const text = await fetchTextViaProxy(url, timeoutMs || 8000);
+        return text.trimStart().startsWith('#EXTM3U');
+    } catch (e) {
+        return false;
+    }
 }
 
 // 处理聚合搜索

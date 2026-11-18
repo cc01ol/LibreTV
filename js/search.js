@@ -71,19 +71,22 @@ async function searchByAPIAndKeyWord(apiId, query) {
             return [];
         }
 
-        const data = await response.json();
+        const rawData = await response.json();
+        const data = normalizeSearchPayload(rawData);
 
         if (!data || !data.list || !Array.isArray(data.list) || data.list.length === 0) {
             return [];
         }
 
-        // 处理第一页结果
-        const results = data.list.map(item => normalizeVodItem({
-            ...item,
-            source_name: apiName,
-            source_code: apiId,
-            api_url: apiId.startsWith('custom_') ? getCustomApiInfo(apiId.replace('custom_', ''))?.url : undefined
-        }));
+        // 处理第一页结果（playable === false 的条目取不到片源，直接跳过）
+        const results = data.list
+            .filter(item => item && item.playable !== false)
+            .map(item => normalizeVodItem({
+                ...item,
+                source_name: apiName,
+                source_code: apiId,
+                api_url: apiId.startsWith('custom_') ? getCustomApiInfo(apiId.replace('custom_', ''))?.url : undefined
+            }));
 
         // 获取总页数
         const pageCount = Number(data.pagecount) > 0 ? Number(data.pagecount) : 1;
@@ -128,17 +131,19 @@ async function searchByAPIAndKeyWord(apiId, query) {
 
                         if (!pageResponse.ok) return [];
 
-                        const pageData = await pageResponse.json();
+                        const pageData = normalizeSearchPayload(await pageResponse.json());
 
                         if (!pageData || !pageData.list || !Array.isArray(pageData.list)) return [];
 
                         // 处理当前页结果
-                        return pageData.list.map(item => normalizeVodItem({
-                            ...item,
-                            source_name: apiName,
-                            source_code: apiId,
-                            api_url: apiId.startsWith('custom_') ? getCustomApiInfo(apiId.replace('custom_', ''))?.url : undefined
-                        }));
+                        return pageData.list
+                            .filter(item => item && item.playable !== false)
+                            .map(item => normalizeVodItem({
+                                ...item,
+                                source_name: apiName,
+                                source_code: apiId,
+                                api_url: apiId.startsWith('custom_') ? getCustomApiInfo(apiId.replace('custom_', ''))?.url : undefined
+                            }));
                     } catch (error) {
                         console.warn(`API ${apiId} 第${page}页搜索失败:`, error);
                         return [];

@@ -95,6 +95,18 @@ const API_SITES = {
         detailPagePath: '/voddetail/{id}.html',
         playPagePath: '/vodplay/{id}-{sid}-{nid}.html',
     },
+    // x影视：自研 JSON 接口（非苹果CMS）
+    //   搜索  /api.php?action=list&q=关键词&page=N   返回 { items:[{id,title,poster,...}], pages }
+    //   详情  /api.php?action=detail&id=X           返回 { lines:[{playlist_v3,count,...}] }
+    //   播放  playlist_v3 里 items[].suffix 与 origins[origin_id] 拼接即为 m3u8 直链
+    xmovie: {
+        api: 'https://xmovie.suyingok.com',
+        name: 'x影视',
+        adapter: 'xmovie',
+        searchPath: '/api.php?action=list&q={query}',
+        pagePath: '/api.php?action=list&q={query}&page={page}',
+        filterByTitle: true, // 关键词也会命中简介/演员，需按标题再过滤
+    },
 
     // FreeOK：官方域名 freeok.vip 已失效（权威 DNS 指向 www.huawei.com，TLS 握手被拒），以下为当前可用镜像。
     // 该站关闭了标准采集接口（/api.php/provide/vod 返回 closed），只提供 suggest 搜索与网页播放页，
@@ -265,9 +277,21 @@ function normalizeVodItem(item) {
     if (!item || typeof item !== 'object') return item;
     if (item.vod_id === undefined && item.id !== undefined) item.vod_id = item.id;
     if (!item.vod_name && item.name) item.vod_name = item.name;
+    if (!item.vod_name && item.title) item.vod_name = item.title;
     if (!item.vod_pic && item.pic) item.vod_pic = item.pic;
+    if (!item.vod_pic && item.poster) item.vod_pic = item.poster;
     if (!item.vod_remarks && item.note) item.vod_remarks = item.note;
+    if (!item.vod_remarks && item.progress) item.vod_remarks = item.progress;
     return item;
+}
+
+// 部分站点的搜索接口返回 {items,pages} 而不是 {list,pagecount}，这里统一成后者
+function normalizeSearchPayload(data) {
+    if (!data || typeof data !== 'object') return data;
+    if (!Array.isArray(data.list) && Array.isArray(data.items)) {
+        return { ...data, list: data.items, pagecount: data.pagecount ?? data.pages };
+    }
+    return data;
 }
 
 // 优化后的正则表达式模式
